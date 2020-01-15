@@ -90,16 +90,10 @@ run_display_medium_posts();
         $list = $a['list'] =='false' ? false: $a['list'];
 		$publication = $a['publication'] =='false' ? false: $a['publication'];
 		$title_tag = $a['title_tag'];
-		$tag = $a['tag'];
-		$date_format = $a['date_format'];
 
 		$content = null;
 
-		if($tag)
-		{
-			$medium_url = "https://medium.com/tag/" . $tag . "?format=json";
-		}
-		else $medium_url = "https://medium.com/" . $handle . "/latest?format=json";
+		$medium_url = "https://medium.com/feed/" . $handle;
 
 		try {
 			$ch = curl_init();
@@ -108,8 +102,9 @@ run_display_medium_posts();
 				throw new Exception('failed to initialize');
 
 			curl_setopt($ch, CURLOPT_URL, $medium_url);
-			curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+			curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 			curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 120);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, array('Expect: 100-continue'));
 
 			$content = curl_exec($ch);
 
@@ -118,7 +113,6 @@ run_display_medium_posts();
 
 		// ...process $content now
 		} catch (Exception $e) {
-
 			trigger_error(
 				sprintf(
 					'Curl failed with error #%d: %s',
@@ -127,114 +121,75 @@ run_display_medium_posts();
 				),
 				E_USER_ERROR
 			);
-
 		}
 
-		$data = str_replace("])}while(1);</x>", "", $content);
+        $xml = simplexml_load_string($content);
+        $json = json_encode($xml);
+        $items = array();
+        $count = 0;
 
-        if($publication) {
-        	//If handle provided is specified as a publication
-	        $json = json_decode($data);
-			$items = array();
-			$count = 0;
-			if(isset($json->payload->posts))
-			{
-				$posts = $json->payload->posts;
-				foreach($posts as $post)
-				{
-					$items[$count]['title'] = $post->title;
-					$items[$count]['url'] = 'https://medium.com/'.$handle.'/'.$post->uniqueSlug;
-					$items[$count]['subtitle'] = isset($post->virtuals->subtitle) ? $post->virtuals->subtitle : "";
-					if(!empty($post->virtuals->previewImage->imageId))
-					{
-						$image = '//cdn-images-1.medium.com/max/500/'.$post->virtuals->previewImage->imageId;
-					}
-					else {
-						$image = $default_image;
-					}
-					$items[$count]['image'] = $image;
-					$items[$count]['duration'] = round($post->virtuals->readingTime);
-					$items[$count]['date'] = isset($post->firstPublishedAt) ? date($date_format, $post->firstPublishedAt/1000): "";
+        foreach ($xml->channel->item as $item) {
+            $items[$count]['title'] = $item->title;
+            $items[$count]['url'] = $item->link;
+            $items[$count]['date'] = $item->pubDate;
 
-					$count++;
-				}
-				if($offset)
-				{
-					$items = array_slice($items, $offset);
-				}
+            $article = $item->children('content', true)->encoded;
+            $doc = new DOMDocument('1.0', 'UTF-8');
+            libxml_use_internal_errors( true );
+            $doc->loadHTML('<meta charset="UTF-8"><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">'.$article);
+            $root = $doc->documentElement;
+            libxml_clear_errors();
+            $figure = $root->getElementsByTagName('figure')->item(0);
+            $items[$count]['image'] = $figure->getElementsByTagName('img')->item(0)->getAttribute("src");
+            $figure->parentNode->removeChild($figure);
 
-				if(count($items) > $total)
-				{
-					$items = array_slice($items, 0, $total);
-				}
-			}
+            $items[$count]['subtitle'] = mb_substr(strip_tags($doc->saveHTML($doc->documentElement)), 0, 300).'...';
+
+            $count++;
         }
-        else {
+        if($offset)
+        {
+            $items = array_slice($items, $offset);
+        }
 
-	        $json = json_decode($data);
-			$items = array();
-			$count = 0;
-			if(isset($json->payload->references->Post))
-			{
-				$posts = $json->payload->references->Post;
-				foreach($posts as $post)
-				{
-					$items[$count]['title'] = $post->title;
-					$items[$count]['url'] = 'https://medium.com/'.$handle.'/'.$post->uniqueSlug;
-					$items[$count]['subtitle'] = isset($post->content->subtitle) ? $post->content->subtitle : "";
-					if(!empty($post->virtuals->previewImage->imageId))
-					{
-						$image = '//cdn-images-1.medium.com/max/500/'.$post->virtuals->previewImage->imageId;
-					}
-					else {
-						$image = $default_image;
-					}
-					$items[$count]['image'] = $image;
-					$items[$count]['duration'] = round($post->virtuals->readingTime);
-					$items[$count]['date'] = isset($post->firstPublishedAt) ? date($date_format, $post->firstPublishedAt/1000): "";
-
-					$count++;
-				}
-				if($offset)
-				{
-					$items = array_slice($items, $offset);
-				}
-
-				if(count($items) > $total)
-				{
-					$items = array_slice($items, 0, $total);
-				}
-			}
+        if(count($items) > $total)
+        {
+            $items = array_slice($items, 0, $total);
         }
     	?>
-		<div id="display-medium-owl-demo" class="display-medium-owl-carousel">
-			<?php foreach($items as $item) { ?>
-		  	<div class="display-medium-item">
-		  		<a href="<?php echo $item['url']; ?>" target="_blank">
+        <ul class="sc_article  grid" style="height: auto">
+            <?php foreach($items as $item) { ?>
+                <a href="<?php echo $item['url']; ?>" target="_blank" class="clearfix">
+                    <li>
+                        <figure class="post_list_thumb">
+                            <?php
+                            if($list)
+                            {
+                                echo '<img src="'.$item['image'].'" class="display-medium-img">';
+                            }
+                            else
+                            {
+                                echo '<div data-src="'.$item['image'].'" class="lazyOwl medium-image"></div>';
+                            }
+                            ?>
+                        </figure>
+                        <div class="meta">
+                            <span style="background:#3842BC; line-height: 3em" class="sc_article_cat">Blockchain Engineer Blog</span>
+                            <div class="sc_article_title">
+                                <<?php echo $title_tag; ?> class="display-medium-title details-title"><?php echo $item['title']; ?></<?php echo $title_tag; ?>>
+                            </div>
+                            <div style="font-size: 0.8em">
+                                <?php echo $item['subtitle']; ?>
+                            </div>
+                            <div class="sc_article_date">
+                                <?php echo "<span class='display-medium-date'>".$item['date']."</span>"; ?>
+                            </div>
+                        </div>
+                    </li>
+                </a>
 
-		  			<?php
-		  				if($list)
-		  				{
-		  					echo '<img src="'.$item['image'].'" class="display-medium-img">';
-						}
-						else
-						{
-							echo '<div data-src="'.$item['image'].'" class="lazyOwl medium-image"></div>';
-						}
-		  			?>
-		  			<<?php echo $title_tag; ?> class="display-medium-title details-title"><?php echo $item['title']; ?></<?php echo $title_tag; ?>>
-		  		</a>
-		        <p class="display-medium-subtitle">
-		            <?php echo $item['subtitle']; ?>
-		        </p>
-	            <p class="display-medium-date-read">
-	            	<?php echo "<span class='display-medium-date'>".$item['date']."</span>"; ?> / <?php echo "<span class='display-medium-readtime'>".$item['duration']."min read</span>"; ?>.
-		            <a href="<?php echo $item['url']; ?>" target="_blank" class="text-right display-medium-readmore">Read More</a>
-		        </p>
-		  	</div>
-
-			<?php } ?>
-		</div>
+            <?php } ?>
+        </ul>
 		<?php
 	  		if(empty($items)) echo "<div class='display-medium-no-post'>No posts found!</div>";
 	  	?>
